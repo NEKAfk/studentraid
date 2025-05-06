@@ -12,11 +12,6 @@
 #include "misc.h"
 #include "RS.h"
 
-#ifndef STUDENTBUILD
-#include "MultipointEvaluation.h"
-#include "FFTProcessors.h"
-#endif
-
 using namespace std;
 //RS code will be defined over GF(2^8)
 #define Extension 8
@@ -70,72 +65,28 @@ CRSProcessor::CRSProcessor(RSParams *pParams): CRAIDProcessor(pParams->CodeDimen
     if (!m_Redundancy)
         throw Exception("Invalid redundancy %d for Reed-Solomon code", m_Redundancy);
 
-#ifndef STUDENTBUILD
-    if (pParams->CyclotomicProcessing&&!((m_Redundancy>=MINCYCLOTOMICREDUNDANCY)&&(m_Redundancy<=MAXCYCLOTOMICREDUNDANCY)))
-        throw Exception("The cyclotomic processor does not support redundancy %d",m_Redundancy);
-    if (pParams->OptimizedCheckLocators&&(m_Redundancy>MAXOPTIMIZEDREDUNDANCY))
-        throw Exception("Optimized check locators are not available for redundancy %d",m_Redundancy);
-    m_CyclotomicProcessing=pParams->CyclotomicProcessing;
-    m_OptimizedCheckLocators=pParams->OptimizedCheckLocators;
-#endif
-
 
     InitGF(Extension);
 
     m_pInfSymbols = new int[m_Dimension];
     m_pCheckSymbols = new int[m_Redundancy];
-#ifndef STUDENTBUILD
-    if (m_OptimizedCheckLocators)
-    {
-        //optimized locator selection
-        memcpy(m_pCheckSymbols,CheckLocators[m_Redundancy-1].pLocators,sizeof(int)*m_Redundancy);
-    }else
-#endif
-    {
-        for (unsigned i = 0; i < m_Redundancy; i++)
-            m_pCheckSymbols[i] = RSLength - m_Redundancy + i;
-    };
+    for (unsigned i = 0; i < m_Redundancy; i++)
+        m_pCheckSymbols[i] = RSLength - m_Redundancy + i;
 
     //the information symbols can be any except those reserved for check symbols
     unsigned j = 0;
-#ifndef STUDENTBUILD
-     if (m_CyclotomicProcessing)
-     {
-            const int* pOrdering=CyclotomicOrderings[m_Redundancy-1];
-            for(unsigned i=0;i<RSLength;i++)
-            {
-                //make sure that this symbol is not used as a check one
-                bool Valid=true;
-                for(unsigned s=0;s<m_Redundancy;s++)
-                    if (m_pCheckSymbols[s]==pOrdering[i])
-                    {
-                        Valid=false;
-                        break;
-                    };
-                if (Valid)
-                {
-                    m_pInfSymbols[j++]=pOrdering[i];
-                    if (j==m_Dimension)
-                        break;
-                };
+    for (unsigned i = 0; i < RSLength; i++) {
+        //make sure that this symbol is not used as a check one
+        bool Valid = true;
+        for (unsigned s = 0; s < m_Redundancy; s++)
+            if (m_pCheckSymbols[s] == i) {
+                Valid = false;
+                break;
             };
-
-     }else
-#endif
-    {
-        for (unsigned i = 0; i < RSLength; i++) {
-            //make sure that this symbol is not used as a check one
-            bool Valid = true;
-            for (unsigned s = 0; s < m_Redundancy; s++)
-                if (m_pCheckSymbols[s] == i) {
-                    Valid = false;
-                    break;
-                };
-            if (Valid) {
-                m_pInfSymbols[j++] = i;
-                if (j == m_Dimension)
-                    break;
-            };
+        if (Valid) {
+            m_pInfSymbols[j++] = i;
+            if (j == m_Dimension)
+                break;
         };
     };
 
@@ -189,11 +140,6 @@ bool CRSProcessor::Attach(CDiskArray *pArray, ///the disk array
     m_pSyndromes = AlignedMalloc(m_Redundancy * m_StripeUnitSize * ConcurrentThreads);
     m_pErasureEvaluator = AlignedMalloc(m_Redundancy * m_StripeUnitSize * ConcurrentThreads);
     m_pSymbols = AlignedMalloc(m_Length * m_StripeUnitSize * ConcurrentThreads);
-    if (m_CyclotomicProcessing) {
-#ifndef STUDENTBUILD
-        m_pCyclotomicTemp=AlignedMalloc(sizeof(GFValue)*m_StripeUnitSize*ConcurrentThreads*CYCLOTOMIC_TEMP_SIZE);
-#endif
-    };
 
 
     m_ppSymbols = new const GFValue *[RSLength * ConcurrentThreads];
@@ -394,13 +340,6 @@ bool CRSProcessor::DecodeDataSymbols(unsigned long long StripeID, ///the stripe 
         };
         GFValue *pSyndrome = m_pSyndromes + ThreadID * m_Redundancy * m_StripeUnitSize;
         GFValue *pErasureEvaluator = m_pErasureEvaluator + ThreadID * m_Redundancy * m_StripeUnitSize;
-#ifndef STUDENTBUILD
-		if (m_CyclotomicProcessing)
-		{
-		//   ComputeSyndrome(ppData,pSyndrome,m_FirstRoot,m_FirstRoot+m_Redundancy,m_StripeUnitSize);
-			ComputeSyndromeCyclotomic(ppData,pSyndrome,m_Redundancy,m_pCyclotomicTemp+ThreadID*CYCLOTOMIC_TEMP_SIZE*m_StripeUnitSize,pErasureEvaluator,m_StripeUnitSize);
-		}else
-#endif
         ComputeSyndrome(ppData, pSyndrome, 0, m_Redundancy, m_StripeUnitSize);
 
         GetErasureEvaluator(pSyndrome, m_pErasureLocators + ErasureSetID * (m_Redundancy + 1), pErasureEvaluator,
@@ -440,49 +379,20 @@ bool CRSProcessor::EncodeStripe(unsigned long long StripeID, ///the stripe to be
 
     GFValue *pSyndrome = m_pSyndromes + ThreadID * m_Redundancy * m_StripeUnitSize;
     GFValue *pErasureEvaluator = m_pErasureEvaluator + ThreadID * m_Redundancy * m_StripeUnitSize;
-#ifndef STUDENTBUILD
-    if (m_CyclotomicProcessing)
-    {
-//        ComputeSyndrome(ppData,pSyndrome,m_FirstRoot,m_FirstRoot+m_Redundancy,m_StripeUnitSize);
-		ComputeSyndromeCyclotomic(ppData,pSyndrome,m_Redundancy,m_pCyclotomicTemp+ThreadID*CYCLOTOMIC_TEMP_SIZE*m_StripeUnitSize,pErasureEvaluator,m_StripeUnitSize);
-    }else
-#endif
     ComputeSyndrome(ppData, pSyndrome, 0, m_Redundancy, m_StripeUnitSize);
 
 
     GetErasureEvaluator(pSyndrome, m_pCheckLocator, pErasureEvaluator, m_Redundancy, m_StripeUnitSize);
-#ifndef STUDENTBUILD
-   if (m_OptimizedCheckLocators)
-    {
+    //recover the erased check symbols
+    for (unsigned i = 0; i < m_Redundancy; i++) {
+        int X = (m_pCheckSymbols[i]) ? FieldSize_1 - m_pCheckSymbols[i] : 0;
         //use pSyndrome as a temporary storage
         //\Gamma(1/X_i)
-        CheckLocators[m_Redundancy-1].Evaluator(pErasureEvaluator,pSyndrome,m_StripeUnitSize);
-        //recover the erased check symbols
-        for(unsigned i=0;i<m_Redundancy;i++)
-        {
-            int X=(m_pCheckSymbols[i])?FieldSize_1-m_pCheckSymbols[i]:0;
-            //Evaluate(pErasureEvaluator,m_Redundancy-1,X,pSyndrome+i*m_StripeUnitSize,m_StripeUnitSize);
-
-            //X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
-            Multiply(m_pCheckLocatorsPrime[i],pSyndrome+i*m_StripeUnitSize,pSyndrome+i*m_StripeUnitSize,m_StripeUnitSize);
-            //send check symbols to disk
-            WriteStripeUnit(StripeID,ErasureSetID,m_Dimension+i,0,1,pSyndrome+i*m_StripeUnitSize);
-        };
-
-    }else
-#endif
-    {
-        //recover the erased check symbols
-        for (unsigned i = 0; i < m_Redundancy; i++) {
-            int X = (m_pCheckSymbols[i]) ? FieldSize_1 - m_pCheckSymbols[i] : 0;
-            //use pSyndrome as a temporary storage
-            //\Gamma(1/X_i)
-            Evaluate(pErasureEvaluator, m_Redundancy - 1, X, pSyndrome, m_StripeUnitSize);
-            //X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
-            Multiply(m_pCheckLocatorsPrime[i], pSyndrome, pSyndrome, m_StripeUnitSize);
-            //send check symbols to disk
-            WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pSyndrome);
-        };
+        Evaluate(pErasureEvaluator, m_Redundancy - 1, X, pSyndrome, m_StripeUnitSize);
+        //X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
+        Multiply(m_pCheckLocatorsPrime[i], pSyndrome, pSyndrome, m_StripeUnitSize);
+        //send check symbols to disk
+        WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pSyndrome);
     };
 
     return true;
@@ -534,57 +444,26 @@ bool CRSProcessor::UpdateInformationSymbols(unsigned long long StripeID, ///the 
     };
     GFValue *pSyndrome = m_pSyndromes + ThreadID * m_Redundancy * m_StripeUnitSize;
     GFValue *pErasureEvaluator = m_pErasureEvaluator + ThreadID * m_Redundancy * m_StripeUnitSize;
-#ifndef STUDENTBUILD
-    if (m_CyclotomicProcessing)
-    {
-     //   ComputeSyndrome(ppData,pSyndrome,m_FirstRoot,m_FirstRoot+m_Redundancy,m_StripeUnitSize);
-		ComputeSyndromeCyclotomic(ppData,pSyndrome,m_Redundancy,m_pCyclotomicTemp+ThreadID*CYCLOTOMIC_TEMP_SIZE*m_StripeUnitSize,pErasureEvaluator,m_StripeUnitSize);
 
-    }
-    elseUpdate
-#endif
     ComputeSyndrome(ppData, pSyndrome, 0, m_Redundancy, m_StripeUnitSize);
 
     GetErasureEvaluator(pSyndrome, m_pCheckLocator, pErasureEvaluator, m_Redundancy, m_StripeUnitSize);
-#ifndef STUDENTBUILD
-    if (m_OptimizedCheckLocators)
-    {
+    //recover the erased check symbols
+    for (unsigned i = 0; i < m_Redundancy; i++) {
+        if (IsErased(ErasureSetID, m_Dimension + i))
+            //no need to update this symbol
+            continue;
+        int X = (m_pCheckSymbols[i]) ? FieldSize_1 - m_pCheckSymbols[i] : 0;
         //use pSyndrome as a temporary storage
         //\Gamma(1/X_i)
-        CheckLocators[m_Redundancy-1].Evaluator(pErasureEvaluator,pSyndrome,m_StripeUnitSize);
-        //recover the erased check symbols
-        for(unsigned i=0;i<m_Redundancy;i++)
-        {
-            int X=(m_pCheckSymbols[i])?FieldSize_1-m_pCheckSymbols[i]:0;
-            //fetch old value
-            Result&=ReadStripeUnit(StripeID,ErasureSetID,m_Dimension+i,0,1,pFetchBuffer);
-            //X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
-            MultiplyAdd(m_pCheckLocatorsPrime[i],pSyndrome+i*m_StripeUnitSize,pFetchBuffer,m_StripeUnitSize);
-            //send check symbols to disk
-            WriteStripeUnit(StripeID,ErasureSetID,m_Dimension+i,0,1,pFetchBuffer);
-        };
-
-    }else
-#endif
-    {
-        //recover the erased check symbols
-        for (unsigned i = 0; i < m_Redundancy; i++) {
-            if (IsErased(ErasureSetID, m_Dimension + i))
-                //no need to update this symbol
-                continue;
-            int X = (m_pCheckSymbols[i]) ? FieldSize_1 - m_pCheckSymbols[i] : 0;
-            //use pSyndrome as a temporary storage
-            //\Gamma(1/X_i)
-            Evaluate(pErasureEvaluator, m_Redundancy - 1, X, pSyndrome, m_StripeUnitSize);
-            //fetch old value
-            Result &= ReadStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pFetchBuffer);
-            //add to it X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
-            MultiplyAdd(m_pCheckLocatorsPrime[i], pSyndrome, pFetchBuffer, m_StripeUnitSize);
-            //write it back
-            Result &= WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pFetchBuffer);
-        };
+        Evaluate(pErasureEvaluator, m_Redundancy - 1, X, pSyndrome, m_StripeUnitSize);
+        //fetch old value
+        Result &= ReadStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pFetchBuffer);
+        //add to it X_i^{1-b}\Gamma(1/X_i)/\Lambda'(1/X_i)
+        MultiplyAdd(m_pCheckLocatorsPrime[i], pSyndrome, pFetchBuffer, m_StripeUnitSize);
+        //write it back
+        Result &= WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, 1, pFetchBuffer);
     };
-
     return true;
 };
 /**

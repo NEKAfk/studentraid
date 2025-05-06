@@ -18,7 +18,4 @@
 //enable AVX processing
 //#define AVX
 
-//student version build
-#define STUDENTBUILD
-
 #endif

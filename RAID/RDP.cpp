@@ -25,48 +25,6 @@ CRDPProcessor::CRDPProcessor(RDPParams *pParams)
     }
 }
 
-void CRDPProcessor::iterative_restore(long long diag_step, long long diag_symbol, long long horizontal_symbol,
-                                      std::array<unsigned char *, 2> RecoverResults,
-                                      std::array<unsigned char *, MAX_ERASURES> pXORBuffer,
-                                      long long diag, long long step, unsigned diag_restore,
-                                      unsigned horizontal_restore, bool restore_missing_diag = false) const {
-    long long row = mod(diag - diag_step * diag_symbol, m_PrimeNumber);
-    while (diag != m_PrimeNumber - 1) {
-        if (RecoverResults[diag_restore]) {
-            memcpy(RecoverResults[diag_restore] + row * m_StripeUnitSize,
-                   pXORBuffer[diag_step] + diag * m_StripeUnitSize, m_StripeUnitSize);
-        }
-        if (restore_missing_diag && (row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber !=
-             m_PrimeNumber - 1) {
-             XOR(pXORBuffer[MAX_ERASURES - diag_step]
-                 + ((row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber) *
-                 m_StripeUnitSize,
-                 RecoverResults[diag_restore] + row * m_StripeUnitSize,
-                 m_StripeUnitSize);
-         }
-        XOR(pXORBuffer[0] + row * m_StripeUnitSize, pXORBuffer[diag_step] + diag * m_StripeUnitSize,
-            m_StripeUnitSize);
-        if (RecoverResults[horizontal_restore]) {
-            memcpy(RecoverResults[horizontal_restore] + row * m_StripeUnitSize,
-                   pXORBuffer[0] + row * m_StripeUnitSize, m_StripeUnitSize);
-        }
-        if (restore_missing_diag && (row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber !=
-             m_PrimeNumber - 1) {
-             XOR(pXORBuffer[MAX_ERASURES - diag_step]
-                 + ((row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber)
-                 * m_StripeUnitSize,
-                 RecoverResults[horizontal_restore] + row * m_StripeUnitSize,
-                 m_StripeUnitSize);
-         }
-        diag = mod(step + diag, m_PrimeNumber);
-        if (diag != m_PrimeNumber - 1) {
-            XOR(pXORBuffer[diag_step] + diag * m_StripeUnitSize, pXORBuffer[0] + row * m_StripeUnitSize,
-                m_StripeUnitSize);
-        }
-        row = mod(step + row, m_PrimeNumber);
-    }
-}
-
 CRDPProcessor::~CRDPProcessor() {
     AlignedFree(m_pRDPXORBuffer);
 }
@@ -302,6 +260,49 @@ bool CRDPProcessor::ReadAndCalcSyndroms(unsigned long long StripeID, unsigned Er
         }
     }
     return Result;
+}
+
+
+void CRDPProcessor::iterative_restore(long long diag_step, long long diag_symbol, long long horizontal_symbol,
+                                      std::array<unsigned char *, 2> RecoverResults,
+                                      std::array<unsigned char *, MAX_ERASURES> pXORBuffer,
+                                      long long diag, long long step, unsigned diag_restore,
+                                      unsigned horizontal_restore, bool restore_missing_diag = false) const {
+    long long row = mod(diag - diag_step * diag_symbol, m_PrimeNumber);
+    while (diag != m_PrimeNumber - 1) {
+        if (RecoverResults[diag_restore]) {
+            memcpy(RecoverResults[diag_restore] + row * m_StripeUnitSize,
+                   pXORBuffer[diag_step] + diag * m_StripeUnitSize, m_StripeUnitSize);
+        }
+        if (restore_missing_diag && (row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber !=
+            m_PrimeNumber - 1) {
+            XOR(pXORBuffer[MAX_ERASURES - diag_step]
+                + ((row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber) *
+                m_StripeUnitSize,
+                RecoverResults[diag_restore] + row * m_StripeUnitSize,
+                m_StripeUnitSize);
+        }
+        XOR(pXORBuffer[0] + row * m_StripeUnitSize, pXORBuffer[diag_step] + diag * m_StripeUnitSize,
+            m_StripeUnitSize);
+        if (RecoverResults[horizontal_restore]) {
+            memcpy(RecoverResults[horizontal_restore] + row * m_StripeUnitSize,
+                   pXORBuffer[0] + row * m_StripeUnitSize, m_StripeUnitSize);
+        }
+        if (restore_missing_diag && (row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber !=
+            m_PrimeNumber - 1) {
+            XOR(pXORBuffer[MAX_ERASURES - diag_step]
+                + ((row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber)
+                * m_StripeUnitSize,
+                RecoverResults[horizontal_restore] + row * m_StripeUnitSize,
+                m_StripeUnitSize);
+        }
+        diag = mod(step + diag, m_PrimeNumber);
+        if (diag != m_PrimeNumber - 1) {
+            XOR(pXORBuffer[diag_step] + diag * m_StripeUnitSize, pXORBuffer[0] + row * m_StripeUnitSize,
+                m_StripeUnitSize);
+        }
+        row = mod(step + row, m_PrimeNumber);
+    }
 }
 
 bool CRDPProcessor::DecodeOneErasure(unsigned long long StripeID, unsigned ErasureSetID, unsigned SymbolID,
@@ -603,6 +604,7 @@ bool CRDPProcessor::DecodeDataSymbols(unsigned long long StripeID, unsigned Eras
 
 bool CRDPProcessor::GetEncodingStrategy(unsigned ErasureSetID, unsigned StripeUnitID, unsigned Subsymbols2Encode) {
     return true; //CRAIDProcessor::GetEncodingStrategy(ErasureSetID, StripeUnitID, Subsymbols2Encode);
+
 }
 
 bool CRDPProcessor::UpdateInformationSymbols(unsigned long long StripeID, unsigned ErasureSetID, unsigned StripeUnitID,

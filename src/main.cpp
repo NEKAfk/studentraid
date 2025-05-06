@@ -24,11 +24,6 @@
 #include "RAID5.h"
 #include "RS.h"
 #include "RDP.h"
-#ifndef STUDENTBUILD
-#include "RAID6.h"
-#include "Cauchy.h"
-#include "RDP.h"
-#endif
 
 //global configuration options
 
@@ -82,11 +77,6 @@ cfg_opt_t opts[] = {
     PARAMCONFIG(RAID5),
     PARAMCONFIG(RS),
     PARAMCONFIG(RDP),
-#ifndef STUDENTBUILD
-    PARAMCONFIG(RAID6),
-    PARAMCONFIG(Cauchy),
-#endif
-
     CFG_END()
 };
 char *pArrayStates[] = {"Uninitialized", "Failed", "Degraded", "Normal "};

@@ -190,21 +190,11 @@ struct cfg_t;
 ///the first parameter of RAIDLIST is the total number of RAID types supported
 #pragma pack(push)
 #pragma pack(1)
-#ifdef STUDENTBUILD
 RAIDLIST(3,
          RAID(RAID5,0),
          RAID(RS,1,unsigned,Redundancy),
          RAID(RDP,1,unsigned,PrimeNumber)
 )
-#else
-RAIDLIST(5,
-    RAID(RAID5,0),
-    RAID(RAID6,0),
-    RAID(Cauchy,1,unsigned,Redundancy),
-    RAID(RS,3,unsigned,Redundancy,bool,CyclotomicProcessing,bool,OptimizedCheckLocators),
-    RAID(RDP,1,unsigned,PrimeNumber)
-    )
-#endif
 #pragma pack(pop)
 
 

@@ -42,11 +42,9 @@ void InitCRC32() {
 void UpdateCRC32(unsigned &CRC, size_t size, const unsigned char *buf) {
     unsigned i;
     for (i = 0; i < size; i++) {
-        std::cerr << std::hex << (unsigned) *(unsigned char *) (buf + i) << std::dec << "|";
         CRC ^= *(unsigned char *) (buf + i);
         CRC = (CRC >> 8) ^ tb32[(unsigned char) CRC];
     }
-    std::cerr << std::endl;
 };
 
 
