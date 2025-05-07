@@ -96,7 +96,7 @@
 #define NAME(X) NAME##X
 
 
-///generates an entry in eRAIDTypes enum 
+///generates an entry in eRAIDTypes enum
 #define DECLARERAID(name,...) rt##name ,
 ///generates struct with RAID parameters
 #define DEFINERAID(name,count,...) RAIDPARAMS(name,count,__VA_ARGS__);
@@ -125,7 +125,7 @@ CFGCONSTRUCTORIMPL(name,count,__VA_ARGS__)
           PARSECONFIG(NumOfTypes,__VA_ARGS__)
 
 #define LISTFUCTORS(NumOfTypes,...)
-#define LISTNAMES(NumOfTypes,...) 
+#define LISTNAMES(NumOfTypes,...)
 
 #else
 
@@ -148,10 +148,10 @@ CFGCONSTRUCTORIMPL(name,count,__VA_ARGS__)
 typedef CRAIDProcessor* (*tRAIDParser)(cfg_t* cfg);
 ///generate an entry in parser function table
 #define FUNCTORRAID(name,...) Parse##name,
-///generate an array of configuration parsers for different RAID types     
-#define LISTFUCTORS(NumOfTypes,...) tRAIDParser Parsers[]={FOREACH__(NumOfTypes,(FUNCTOR,__VA_ARGS__)) NULL };     
+///generate an array of configuration parsers for different RAID types
+#define LISTFUCTORS(NumOfTypes,...) tRAIDParser Parsers[]={FOREACH__(NumOfTypes,(FUNCTOR,__VA_ARGS__)) NULL };
 ///generate a table of possible RAID names
-#define LISTNAMES(NumOfTypes,...) const char* ppRAIDNames[]={FOREACH__(NumOfTypes,(NAME,__VA_ARGS__)) NULL };     
+#define LISTNAMES(NumOfTypes,...) const char* ppRAIDNames[]={FOREACH__(NumOfTypes,(NAME,__VA_ARGS__)) NULL };
 
 
 
@@ -172,12 +172,12 @@ typedef CRAIDProcessor* (*tRAIDParser)(cfg_t* cfg);
 #define cfg_getunsigned cfg_getint
 
 ///define parsers for all RAID configurations
-#define PARSECONFIG(NumOfTypes,...) FOREACH__(NumOfTypes,(PARSE,__VA_ARGS__)) ; LISTFUCTORS(NumOfTypes,__VA_ARGS__); LISTNAMES(NumOfTypes,__VA_ARGS__); 
+#define PARSECONFIG(NumOfTypes,...) FOREACH__(NumOfTypes,(PARSE,__VA_ARGS__)) ; LISTFUCTORS(NumOfTypes,__VA_ARGS__); LISTNAMES(NumOfTypes,__VA_ARGS__);
 
 #else
 //no parser declaration is needed
-#define CFGOPTIONLIST(name,count,...) 
-#define CFGCONSTRUCTORIMPL(name,count,...) 
+#define CFGOPTIONLIST(name,count,...)
+#define CFGCONSTRUCTORIMPL(name,count,...)
 #define PARSECONFIG(NumOfTypes,...)
 
 struct cfg_t;

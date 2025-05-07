@@ -11,11 +11,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-//enable arithmetic operation counting
+// enable arithmetic operation counting
 #define OPERATION_COUNTING
-//implement disk emulator via memory-mapped files
+// implement disk emulator via memory-mapped files
 #define USE_MMAP
-//enable AVX processing
-//#define AVX
+// enable AVX processing
+// #define AVX
 
 #endif

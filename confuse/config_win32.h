@@ -5,7 +5,7 @@
 /*#undef ENABLE_NLS*/
 
 /* Define if the GNU dcgettext() function is already present or preinstalled.
-   */
+ */
 /*#undef HAVE_DCGETTEXT*/
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
