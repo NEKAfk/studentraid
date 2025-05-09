@@ -227,6 +227,18 @@ bool CRDPProcessor::DecodeDataSubsymbols(
   }
 }
 
+/**
+ * Helper function to read symbols that are not erased and calculate syndroms
+ * @param StripeID the stripe to be processed
+ * @param ErasureSetID identifies the load balancing offset
+ * @param SymbolID the symbol to be processed
+ * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
+ * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
+ * @param ThreadID the ID of the calling thread
+ * @param pXORBuffer pointers to buffer where syndromes will be stored(nullptr for unused syndromes)
+ * @param CalcMissingDiag optional argument for calculating diagonal syndrome of the (m_PrimeNumber-1) diagonal
+ * @return true on a success, false otherwise
+ */
 bool CRDPProcessor::ReadAndCalcSyndroms(
     unsigned long long StripeID,
     unsigned ErasureSetID,
@@ -282,6 +294,19 @@ bool CRDPProcessor::ReadAndCalcSyndroms(
   return Result;
 }
 
+/**
+ * Restore two information symbols
+ * @param diag_step describes which diagonal to use(offset of the diagonal)
+ * @param diag_symbol ID of symbols recovered by diagonal syndrome
+ * @param horizontal_symbol ID of symbols recovered by horizontal syndrome
+ * @param RecoverResults data to store recovered symbols
+ * @param pXORBuffer buffer with calculated syndromes
+ * @param diag current diagonal to started restoring
+ * @param step difference between two symbols IDs
+ * @param diag_restore which of the RecoverResults will be recovered by diagonal syndrome
+ * @param horizontal_restore which of the RecoverResults will be recovered by horizontal syndrome
+ * @param restore_missing_diag should we recalc syndrome of unused diagonal after restoring symbols
+ */
 void CRDPProcessor::iterative_restore(
     long long diag_step,
     long long diag_symbol,
@@ -332,6 +357,17 @@ void CRDPProcessor::iterative_restore(
   }
 }
 
+/**
+ * Helper function to restore three erasures
+ * @param StripeID the stripe to be processed
+ * @param ErasureSetID identifies the load balancing offset
+ * @param SymbolID the symbol to be processed
+ * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
+ * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
+ * @param ThreadID the ID of the calling thread
+ * @param ErasurePosition optional argument if we already know what symbol we want to restore
+ * @return true on a success, false otherwise
+ */
 bool CRDPProcessor::DecodeOneErasure(
     unsigned long long StripeID,
     unsigned ErasureSetID,
@@ -351,6 +387,18 @@ bool CRDPProcessor::DecodeOneErasure(
   return ReadAndCalcSyndroms(StripeID, ErasureSetID, SymbolID, Symbols2Decode, pDest, ThreadID, pXORBuffer);
 }
 
+/**
+ * Helper function to restore three erasures
+ * @param StripeID the stripe to be processed
+ * @param ErasureSetID identifies the load balancing offset
+ * @param SymbolID the symbol to be processed
+ * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
+ * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
+ * @param ThreadID the ID of the calling thread
+ * @param diag_step diagonal that will be used to restore erasures
+ * @param ErasurePosition optional argument if we already know what symbols we want to restore
+ * @return true on a success, false otherwise
+ */
 bool CRDPProcessor::DecodeTwoErasures(
     unsigned long long StripeID,
     unsigned ErasureSetID,
@@ -442,6 +490,16 @@ bool CRDPProcessor::DecodeTwoErasures(
   return Result;
 }
 
+/**
+ * Helper function to restore three erasures
+ * @param StripeID the stripe to be processed
+ * @param ErasureSetID identifies the load balancing offset
+ * @param SymbolID the symbol to be processed
+ * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
+ * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
+ * @param ThreadID the ID of the calling thread
+ * @return true on a success, false otherwise
+ */
 bool CRDPProcessor::DecodeThreeErasures(
     unsigned long long StripeID,
     unsigned ErasureSetID,
