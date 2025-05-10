@@ -1,3 +1,8 @@
+/*********************************************************
+ * RDP.h  - implementation of a RAID-5 processor
+ * Author: N. Zavialov 408627@niuitmo.ru
+ * ********************************************************/
+
 #include "RDP.h"
 
 #include "arithmetic.h"
@@ -19,8 +24,12 @@ CRDPProcessor::CRDPProcessor(RDPParams* pParams)
     : CRAIDProcessor(pParams->CodeDimension + MAX_ERASURES, pParams->PrimeNumber - 1, pParams, sizeof(*pParams))
     , m_PrimeNumber(pParams->PrimeNumber)
     , m_pRDPXORBuffer(nullptr)
+    , m_Shortering(m_PrimeNumber - 1 - pParams->CodeDimension)
     , BLOCK_SIZE(m_StripeUnitSize * m_PrimeNumber)
-    , BUFFER_SIZE(BLOCK_SIZE * BLOCKS_PER_BUFFER) {
+    , BUFFER_SIZE(BLOCK_SIZE * BLOCKS_PER_BUFFER)
+    , fst(m_PrimeNumber, 0)
+    , snd(m_PrimeNumber, 0)
+    , prod(m_Length * m_InterleavingOrder, std::vector<unsigned>(m_PrimeNumber, 0)) {
   if (m_StripeUnitSize % ARITHMETIC_ALIGNMENT) {
     throw Exception("Stripe size must be a multiple of #ARITHMETIC_ALIGNMENT");
   }
@@ -46,17 +55,15 @@ bool CRDPProcessor::CheckCodeword(unsigned long long StripeID, unsigned ErasureS
   std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
   for (unsigned i = 0; i < MAX_ERASURES; i++) {
     pXORBuffer[i] = m_pRDPXORBuffer + (i + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
+    memset(pXORBuffer[i], 0, BLOCK_SIZE);
   }
   unsigned char* pReadBuffer = m_pRDPXORBuffer + (MAX_ERASURES + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
-  bool Result = ReadStripeUnit(StripeID, ErasureSetID, 0, 0, m_StripeUnitsPerSymbol, pXORBuffer[0]);
-  for (unsigned i = 1; i < MAX_ERASURES; i++) {
-    memcpy(pXORBuffer[i], pXORBuffer[0], m_StripeUnitsPerSymbol * m_StripeUnitSize);
-  }
-  for (long long i = 1; i < m_PrimeNumber; i++) {
+  bool Result = true;
+  for (long long i = 0; i <= m_Dimension; i++) {
     Result &= ReadStripeUnit(StripeID, ErasureSetID, i, 0, m_StripeUnitsPerSymbol, pReadBuffer);
     for (long long k = 0; k < m_StripeUnitsPerSymbol; k++) {
       for (long long j = 0; j < MAX_ERASURES; j++) {
-        long long Diag = (k + j * i) % m_PrimeNumber;
+        long long Diag = (k + j * (i + m_Shortering)) % m_PrimeNumber;
         if (Diag == m_PrimeNumber - 1) {
           continue;
         }
@@ -65,7 +72,7 @@ bool CRDPProcessor::CheckCodeword(unsigned long long StripeID, unsigned ErasureS
     }
   }
   for (unsigned j = 1; j < MAX_ERASURES; j++) {
-    Result &= ReadStripeUnit(StripeID, ErasureSetID, m_PrimeNumber - 1 + j, 0, m_StripeUnitsPerSymbol, pReadBuffer);
+    Result &= ReadStripeUnit(StripeID, ErasureSetID, m_Dimension + j, 0, m_StripeUnitsPerSymbol, pReadBuffer);
     XOR(pXORBuffer[j], pReadBuffer, m_StripeUnitSize * m_StripeUnitsPerSymbol);
   }
   if (!Result) {
@@ -91,27 +98,23 @@ bool CRDPProcessor::EncodeStripe(
   std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
   pXORBuffer[0] = std::ranges::all_of(
                       std::views::iota(0u, MAX_ERASURES),
-                      [&](unsigned i) { return IsErased(ErasureSetID, m_PrimeNumber - 1 + i); }
+                      [&](unsigned i) { return IsErased(ErasureSetID, m_Dimension + i); }
                   )
                     ? nullptr
                     : m_pRDPXORBuffer + ThreadID * BLOCKS_PER_BUFFER * BLOCK_SIZE;
   for (int i = 1; i < MAX_ERASURES; i++) {
-    pXORBuffer[i] = IsErased(ErasureSetID, m_PrimeNumber - 1 + i)
+    pXORBuffer[i] = IsErased(ErasureSetID, m_Dimension + i)
                       ? nullptr
                       : m_pRDPXORBuffer + (i + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
   }
-
-  bool Result = true;
-  if (!IsErased(ErasureSetID, 0)) {
-    Result &= WriteStripeUnit(StripeID, ErasureSetID, 0, 0, m_StripeUnitsPerSymbol, pData);
-  }
-  for (unsigned i = 0; i < MAX_ERASURES; i++) {
+  for (int i = 0; i < MAX_ERASURES; i++) {
     if (pXORBuffer[i]) {
-      memcpy(pXORBuffer[i], pData, m_StripeUnitsPerSymbol * m_StripeUnitSize);
+      memset(pXORBuffer[i], 0, BLOCK_SIZE);
     }
   }
-  pData += m_StripeUnitSize * m_StripeUnitsPerSymbol;
-  for (unsigned i = 1; i < m_Dimension; i++, pData += m_StripeUnitSize * m_StripeUnitsPerSymbol) {
+
+  bool Result = true;
+  for (unsigned i = 0; i < m_Dimension; i++, pData += m_StripeUnitSize * m_StripeUnitsPerSymbol) {
     if (!IsErased(ErasureSetID, i)) {
       Result &= WriteStripeUnit(StripeID, ErasureSetID, i, 0, m_StripeUnitsPerSymbol, pData);
     }
@@ -120,7 +123,7 @@ bool CRDPProcessor::EncodeStripe(
         continue;
       }
       for (long long k = 0; k < m_StripeUnitsPerSymbol; k++) {
-        long long Diag = (k + j * i) % m_PrimeNumber;
+        long long Diag = (k + j * (i + m_Shortering)) % m_PrimeNumber;
         if (Diag == m_PrimeNumber - 1) {
           continue;
         }
@@ -128,21 +131,21 @@ bool CRDPProcessor::EncodeStripe(
       }
     }
   }
-  if (!IsErased(ErasureSetID, m_PrimeNumber - 1)) {
-    Result &= WriteStripeUnit(StripeID, ErasureSetID, m_PrimeNumber - 1, 0, m_StripeUnitsPerSymbol, pXORBuffer[0]);
+  if (!IsErased(ErasureSetID, m_Dimension)) {
+    Result &= WriteStripeUnit(StripeID, ErasureSetID, m_Dimension, 0, m_StripeUnitsPerSymbol, pXORBuffer[0]);
   }
   for (long long j = 1; j < MAX_ERASURES; j++) {
-    if (IsErased(ErasureSetID, m_PrimeNumber - 1 + j)) {
+    if (IsErased(ErasureSetID, m_Dimension + j)) {
       continue;
     }
     for (long long k = 0; k < m_StripeUnitsPerSymbol; k++) {
-      long long Diag = (k + j * (m_PrimeNumber - 1)) % m_PrimeNumber;
+      long long Diag = (k + j * (m_Dimension + m_Shortering)) % m_PrimeNumber;
       if (Diag == m_PrimeNumber - 1) {
         continue;
       }
       XOR(pXORBuffer[j] + Diag * m_StripeUnitSize, pXORBuffer[0] + k * m_StripeUnitSize, m_StripeUnitSize);
     }
-    Result &= WriteStripeUnit(StripeID, ErasureSetID, m_PrimeNumber - 1 + j, 0, m_StripeUnitsPerSymbol, pXORBuffer[j]);
+    Result &= WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + j, 0, m_StripeUnitsPerSymbol, pXORBuffer[j]);
   }
   return Result;
 }
@@ -164,23 +167,23 @@ bool CRDPProcessor::DecodeDataSubsymbols(
   bool Result = true;
   unsigned char* pReadBuffer = m_pRDPXORBuffer + (MAX_ERASURES + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
   memset(pDest, 0, m_StripeUnitSize * Subsymbols2Decode);
-  long long diag_step = SymbolID < m_PrimeNumber ? 0 : SymbolID - m_PrimeNumber + 1;
+  long long diag_step = SymbolID <= m_Dimension ? 0 : SymbolID - m_Dimension;
 
   if (NumberOfErasures == 1 ||
       std::ranges::all_of(
           std::views::iota(0u, NumberOfErasures),
-          [&](unsigned i) { return GetErasedPosition(ErasureSetID, i) >= m_PrimeNumber; }
+          [&](unsigned i) { return GetErasedPosition(ErasureSetID, i) >= m_Dimension + 1; }
       ) ||
-      (SymbolID < m_PrimeNumber && std::ranges::count_if(std::views::iota(0u, NumberOfErasures), [&](unsigned i) {
-                                     return GetErasedPosition(ErasureSetID, i) >= m_PrimeNumber;
-                                   }) == NumberOfErasures - 1)) {
-    for (unsigned i = 0; i < m_PrimeNumber; ++i) {
+      (SymbolID <= m_Dimension && std::ranges::count_if(std::views::iota(0u, NumberOfErasures), [&](unsigned i) {
+                                    return GetErasedPosition(ErasureSetID, i) >= m_Dimension + 1;
+                                  }) == NumberOfErasures - 1)) {
+    for (unsigned i = 0; i <= m_Dimension; ++i) {
       if (IsErased(ErasureSetID, i)) {
         continue;
       }
 
       for (long long j = SubsymbolID; j < SubsymbolID + Subsymbols2Decode; j++) {
-        long long Shift = mod(j - diag_step * i, m_PrimeNumber);
+        long long Shift = mod(j - diag_step * (i + m_Shortering), m_PrimeNumber);
         if (Shift == m_PrimeNumber - 1) {
           continue;
         }
@@ -190,26 +193,26 @@ bool CRDPProcessor::DecodeDataSubsymbols(
     }
     return Result;
   } else if (std::ranges::count_if(std::views::iota(0u, NumberOfErasures), [&](unsigned i) {
-               return GetErasedPosition(ErasureSetID, i) >= m_PrimeNumber;
+               return GetErasedPosition(ErasureSetID, i) >= m_Dimension + 1;
              }) == NumberOfErasures - 1) {
     long long k =
         GetErasedPosition(ErasureSetID, std::ranges::min(std::views::iota(0u, NumberOfErasures), {}, [&](unsigned i) {
                             return GetErasedPosition(ErasureSetID, i);
                           }));
-    for (long long i = 0; i < m_PrimeNumber; ++i) {
+    for (long long i = 0; i <= m_Dimension; ++i) {
       if (IsErased(ErasureSetID, i)) {
         continue;
       }
 
       for (long long j = SubsymbolID; j < SubsymbolID + Subsymbols2Decode; j++) {
-        long long Shift = mod(j - diag_step * i, m_PrimeNumber);
+        long long Shift = mod(j - diag_step * (i + m_Shortering), m_PrimeNumber);
         if (Shift == m_PrimeNumber - 1) {
           continue;
         }
         Result &= ReadStripeUnit(StripeID, ErasureSetID, i, Shift, 1, pReadBuffer);
         XOR(pDest + (j - SubsymbolID) * m_StripeUnitSize, pReadBuffer, m_StripeUnitSize);
 
-        Shift = mod(j - diag_step * k, m_PrimeNumber);
+        Shift = mod(j - diag_step * (k + m_Shortering), m_PrimeNumber);
         if (Shift == m_PrimeNumber - 1) {
           continue;
         }
@@ -260,18 +263,18 @@ bool CRDPProcessor::ReadAndCalcSyndroms(
     if (i >= SymbolID && i < SymbolID + Symbols2Decode) {
       pBuffer = pDest + (i - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
     } else {
-      if (i >= m_PrimeNumber && !pXORBuffer[i - m_PrimeNumber + 1]) {
+      if (i >= m_Dimension + 1 && !pXORBuffer[i - m_Dimension]) {
         continue;
       }
       pBuffer = pReadBuffer;
     }
     Result &= ReadStripeUnit(StripeID, ErasureSetID, i, 0, m_StripeUnitsPerSymbol, pBuffer);
 
-    if (i >= m_PrimeNumber) {
-      XOR(pXORBuffer[i - m_PrimeNumber + 1], pBuffer, m_StripeUnitSize * m_StripeUnitsPerSymbol);
+    if (i >= m_Dimension + 1) {
+      XOR(pXORBuffer[i - m_Dimension], pBuffer, m_StripeUnitSize * m_StripeUnitsPerSymbol);
       if (CalcMissingDiag) {
         for (long long j = 0; j < m_StripeUnitsPerSymbol; ++j) {
-          XOR(pXORBuffer[i - m_PrimeNumber + 1] + (m_PrimeNumber - 1) * m_StripeUnitSize,
+          XOR(pXORBuffer[i - m_Dimension] + (m_PrimeNumber - 1) * m_StripeUnitSize,
               pBuffer + j * m_StripeUnitSize,
               m_StripeUnitSize);
         }
@@ -282,7 +285,7 @@ bool CRDPProcessor::ReadAndCalcSyndroms(
           continue;
         }
         for (long long k = 0; k < m_StripeUnitsPerSymbol; k++) {
-          long long Diag = (k + i * j) % m_PrimeNumber;
+          long long Diag = (k + j * (i + m_Shortering)) % m_PrimeNumber;
           if (!CalcMissingDiag && Diag == m_PrimeNumber - 1) {
             continue;
           }
@@ -319,7 +322,7 @@ void CRDPProcessor::iterative_restore(
     unsigned horizontal_restore,
     bool restore_missing_diag = false
 ) const {
-  long long row = mod(diag - diag_step * diag_symbol, m_PrimeNumber);
+  long long row = mod(diag - diag_step * (diag_symbol + m_Shortering), m_PrimeNumber);
   while (diag != m_PrimeNumber - 1) {
     if (RecoverResults[diag_restore]) {
       memcpy(
@@ -328,9 +331,10 @@ void CRDPProcessor::iterative_restore(
           m_StripeUnitSize
       );
     }
-    if (restore_missing_diag && (row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber != m_PrimeNumber - 1) {
+    if (restore_missing_diag &&
+        (row + (MAX_ERASURES - diag_step) * (diag_symbol + m_Shortering)) % m_PrimeNumber != m_PrimeNumber - 1) {
       XOR(pXORBuffer[MAX_ERASURES - diag_step] +
-              ((row + (MAX_ERASURES - diag_step) * diag_symbol) % m_PrimeNumber) * m_StripeUnitSize,
+              ((row + (MAX_ERASURES - diag_step) * (diag_symbol + m_Shortering)) % m_PrimeNumber) * m_StripeUnitSize,
           RecoverResults[diag_restore] + row * m_StripeUnitSize,
           m_StripeUnitSize);
     }
@@ -343,9 +347,10 @@ void CRDPProcessor::iterative_restore(
       );
     }
     if (restore_missing_diag &&
-        (row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber != m_PrimeNumber - 1) {
+        (row + (MAX_ERASURES - diag_step) * (horizontal_symbol + m_Shortering)) % m_PrimeNumber != m_PrimeNumber - 1) {
       XOR(pXORBuffer[MAX_ERASURES - diag_step] +
-              ((row + (MAX_ERASURES - diag_step) * horizontal_symbol) % m_PrimeNumber) * m_StripeUnitSize,
+              ((row + (MAX_ERASURES - diag_step) * (horizontal_symbol + m_Shortering)) % m_PrimeNumber) *
+                  m_StripeUnitSize,
           RecoverResults[horizontal_restore] + row * m_StripeUnitSize,
           m_StripeUnitSize);
     }
@@ -380,7 +385,7 @@ bool CRDPProcessor::DecodeOneErasure(
   if (ErasurePosition == -1) {
     ErasurePosition = GetErasedPosition(ErasureSetID, 0);
   }
-  long long Shift = ErasurePosition < m_PrimeNumber ? 0 : ErasurePosition - m_PrimeNumber + 1;
+  long long Shift = ErasurePosition <= m_Dimension ? 0 : ErasurePosition - m_Dimension;
   std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
   pXORBuffer[Shift] = pDest + (ErasurePosition - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
   memset(pXORBuffer[Shift], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
@@ -416,32 +421,32 @@ bool CRDPProcessor::DecodeTwoErasures(
   std::ranges::sort(ErasurePosition);
   std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
 
-  if (ErasurePosition[0] >= m_PrimeNumber ||
-      (ErasurePosition[1] >= m_PrimeNumber &&
+  if (ErasurePosition[0] >= m_Dimension + 1 ||
+      (ErasurePosition[1] >= m_Dimension + 1 &&
        (ErasurePosition[1] < SymbolID || ErasurePosition[1] >= SymbolID + Symbols2Decode))) {
     for (auto pos : ErasurePosition) {
       if ((pos >= SymbolID) && (pos < SymbolID + Symbols2Decode)) {
-        long long idx = pos < m_PrimeNumber ? 0 : pos - m_PrimeNumber + 1;
+        long long idx = pos <= m_Dimension ? 0 : pos - m_Dimension;
         pXORBuffer[idx] = pDest + (pos - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
         memset(pXORBuffer[idx], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
       }
     }
     return ReadAndCalcSyndroms(StripeID, ErasureSetID, SymbolID, Symbols2Decode, pDest, ThreadID, pXORBuffer);
-  } else if (ErasurePosition[1] >= m_PrimeNumber) {
+  } else if (ErasurePosition[1] >= m_Dimension + 1) {
     pXORBuffer[0] = (ErasurePosition[0] >= SymbolID) && (ErasurePosition[0] < SymbolID + Symbols2Decode)
                       ? pDest + (ErasurePosition[0] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
                       : m_pRDPXORBuffer + ThreadID * BLOCKS_PER_BUFFER * BLOCK_SIZE;
     memset(pXORBuffer[0], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
-    pXORBuffer[ErasurePosition[1] - m_PrimeNumber + 1] =
+    pXORBuffer[ErasurePosition[1] - m_Dimension] =
         pDest + (ErasurePosition[1] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
-    memset(pXORBuffer[ErasurePosition[1] - m_PrimeNumber + 1], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
+    memset(pXORBuffer[ErasurePosition[1] - m_Dimension], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
     Result = ReadAndCalcSyndroms(StripeID, ErasureSetID, SymbolID, Symbols2Decode, pDest, ThreadID, pXORBuffer);
     for (long long j = 0; j < m_StripeUnitsPerSymbol; j++) {
-      long long Diag = (j + (ErasurePosition[1] - m_PrimeNumber + 1) * ErasurePosition[0]) % m_PrimeNumber;
+      long long Diag = (j + (ErasurePosition[1] - m_Dimension) * (ErasurePosition[0] + m_Shortering)) % m_PrimeNumber;
       if (Diag == m_PrimeNumber - 1) {
         continue;
       }
-      XOR(pXORBuffer[ErasurePosition[1] - m_PrimeNumber + 1] + Diag * m_StripeUnitSize,
+      XOR(pXORBuffer[ErasurePosition[1] - m_Dimension] + Diag * m_StripeUnitSize,
           pXORBuffer[0] + j * m_StripeUnitSize,
           m_StripeUnitSize);
     }
@@ -470,7 +475,7 @@ bool CRDPProcessor::DecodeTwoErasures(
       ErasurePosition[0],
       RecoverResults,
       pXORBuffer,
-      mod(diag_step * ErasurePosition[0] - 1, m_PrimeNumber),
+      mod(diag_step * (ErasurePosition[0] + m_Shortering) - 1, m_PrimeNumber),
       -step,
       1,
       0
@@ -481,7 +486,7 @@ bool CRDPProcessor::DecodeTwoErasures(
       ErasurePosition[1],
       RecoverResults,
       pXORBuffer,
-      mod(diag_step * ErasurePosition[1] - 1, m_PrimeNumber),
+      mod(diag_step * (ErasurePosition[1] + m_Shortering) - 1, m_PrimeNumber),
       step,
       0,
       1
@@ -515,7 +520,7 @@ bool CRDPProcessor::DecodeThreeErasures(
 
   std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
 
-  if (ErasurePosition[1] >= m_PrimeNumber) {
+  if (ErasurePosition[1] >= m_Dimension + 1) {
     if (std::none_of(ErasurePosition.begin() + 1, ErasurePosition.end(), [&](int i) {
           return i >= SymbolID && i < SymbolID + Symbols2Decode;
         })) {
@@ -527,9 +532,9 @@ bool CRDPProcessor::DecodeThreeErasures(
       memset(pXORBuffer[0], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
       for (unsigned i = 1; i < MAX_ERASURES; i++) {
         if (ErasurePosition[i] >= SymbolID && ErasurePosition[i] < SymbolID + Symbols2Decode) {
-          pXORBuffer[ErasurePosition[i] - m_PrimeNumber + 1] =
+          pXORBuffer[ErasurePosition[i] - m_Dimension] =
               pDest + (ErasurePosition[i] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
-          memset(pXORBuffer[ErasurePosition[i] - m_PrimeNumber + 1], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
+          memset(pXORBuffer[ErasurePosition[i] - m_Dimension], 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
         }
       }
       Result = ReadAndCalcSyndroms(StripeID, ErasureSetID, SymbolID, Symbols2Decode, pDest, ThreadID, pXORBuffer);
@@ -538,7 +543,7 @@ bool CRDPProcessor::DecodeThreeErasures(
           continue;
         }
         for (long long j = 0; j < m_StripeUnitsPerSymbol; j++) {
-          long long Diag = (j + i * ErasurePosition[0]) % m_PrimeNumber;
+          long long Diag = (j + i * (ErasurePosition[0] + m_Shortering)) % m_PrimeNumber;
           if (Diag == m_PrimeNumber - 1) {
             continue;
           }
@@ -547,8 +552,8 @@ bool CRDPProcessor::DecodeThreeErasures(
       }
       return Result;
     }
-  } else if (ErasurePosition[2] >= m_PrimeNumber) {
-    long long diag_step = ErasurePosition[2] == m_PrimeNumber ? 2 : 1;
+  } else if (ErasurePosition[2] >= m_Dimension + 1) {
+    long long diag_step = ErasurePosition[2] == m_Dimension + 1 ? 2 : 1;
     if (ErasurePosition[2] < SymbolID || ErasurePosition[2] >= SymbolID + Symbols2Decode) {
       return DecodeTwoErasures(
           StripeID,
@@ -586,7 +591,7 @@ bool CRDPProcessor::DecodeThreeErasures(
           ErasurePosition[0],
           RecoverResults,
           pXORBuffer,
-          mod(diag_step * ErasurePosition[0] - 1, m_PrimeNumber),
+          mod(diag_step * (ErasurePosition[0] + m_Shortering) - 1, m_PrimeNumber),
           -step,
           1,
           0,
@@ -598,7 +603,7 @@ bool CRDPProcessor::DecodeThreeErasures(
           ErasurePosition[1],
           RecoverResults,
           pXORBuffer,
-          mod(diag_step * ErasurePosition[1] - 1, m_PrimeNumber),
+          mod(diag_step * (ErasurePosition[1] + m_Shortering) - 1, m_PrimeNumber),
           step,
           0,
           1,
@@ -615,44 +620,17 @@ bool CRDPProcessor::DecodeThreeErasures(
 
   Result = ReadAndCalcSyndroms(StripeID, ErasureSetID, SymbolID, Symbols2Decode, pDest, ThreadID, pXORBuffer, true);
 
-  long long l{}, m{}, r{};
-  for (unsigned i = 0; i < MAX_ERASURES; i++) {
-    if (ErasurePosition[i] >= SymbolID && ErasurePosition[i] < SymbolID + Symbols2Decode) {
-      m = ErasurePosition[i];
-      l = i == 0 ? ErasurePosition[1] : ErasurePosition[0];
-      r = i == MAX_ERASURES - 1 ? ErasurePosition[1] : ErasurePosition[MAX_ERASURES - 1];
-      break;
-    }
-  }
-  std::vector<unsigned> fst(m_PrimeNumber, 0), snd(m_PrimeNumber, 0), prod(m_PrimeNumber, 0);
-  long long idx1 = m_PrimeNumber - 1, idx2 = m_PrimeNumber - 1;
-  long long i1 = mod(std::min(m, l) - 1, m_PrimeNumber), i2 = mod(std::min(r, m) - 1, m_PrimeNumber);
+  long long l = ErasurePosition[0] + m_Shortering;
+  long long r = ErasurePosition[2] + m_Shortering;
 
-  for (unsigned s = 1; s <= m_PrimeNumber - 1; ++s) {
-    fst[mod(idx1 - 2 * abs(m - l), m_PrimeNumber)] =
-        fst[idx1] ^ (i1 == 0 ? 1u : 0u) ^ (mod(i1 - abs(m - l), m_PrimeNumber) == 0 ? 1u : 0u);
-    snd[mod(idx2 - 2 * abs(r - m), m_PrimeNumber)] =
-        snd[idx2] ^ (i2 == 0 ? 1u : 0u) ^ (mod(i2 - abs(r - m), m_PrimeNumber) == 0 ? 1u : 0u);
-    idx1 = mod(idx1 - 2 * abs(m - l), m_PrimeNumber);
-    idx2 = mod(idx2 - 2 * abs(r - m), m_PrimeNumber);
-    i1 = mod(i1 - 2 * abs(m - l), m_PrimeNumber);
-    i2 = mod(i2 - 2 * abs(r - m), m_PrimeNumber);
-  }
-  for (long long i = 0; i < m_PrimeNumber; i++) {
-    for (long long j = 0; j < m_PrimeNumber; j++) {
-      prod[mod(i + j, m_PrimeNumber)] = prod[mod(i + j, m_PrimeNumber)] ^ (fst[i] & snd[j]);
-    }
-  }
-  if (prod[m_PrimeNumber - 1]) {
-    std::ranges::for_each(prod, [](auto&& e) { e = 1 - e; });
-  }
-
-  unsigned char* Recover = pDest + (m - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol;
+  unsigned char* Recover = (ErasurePosition[1] >= SymbolID && ErasurePosition[1] < SymbolID + Symbols2Decode)
+                             ? pDest + (ErasurePosition[1] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
+                             : m_pRDPXORBuffer + (MAX_ERASURES + 1 + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
   memset(Recover, 0, m_StripeUnitSize * m_StripeUnitsPerSymbol);
 
-  unsigned Missing = prod[mod(-1 - (l + r), m_PrimeNumber)];
+  unsigned Missing = prod[ErasureSetID][mod(-1 - (l + r), m_PrimeNumber)];
   for (long long i = 0; i < m_PrimeNumber - 1; ++i) {
-    if (prod[mod(i - (l + r), m_PrimeNumber)] ^ Missing) {
+    if (prod[ErasureSetID][mod(i - (l + r), m_PrimeNumber)] ^ Missing) {
       for (long long j = 0; j < m_StripeUnitsPerSymbol; ++j) {
         XOR(Recover + j * m_StripeUnitSize,
             pXORBuffer[0] + mod(j - i, m_PrimeNumber) * m_StripeUnitSize,
@@ -663,9 +641,9 @@ bool CRDPProcessor::DecodeThreeErasures(
     }
   }
 
-  Missing = prod[mod(-1 - l, m_PrimeNumber)] ^ prod[mod(-1 - r, m_PrimeNumber)];
+  Missing = prod[ErasureSetID][mod(-1 - l, m_PrimeNumber)] ^ prod[ErasureSetID][mod(-1 - r, m_PrimeNumber)];
   for (long long i = 0; i < m_PrimeNumber - 1; ++i) {
-    if ((prod[mod(i - l, m_PrimeNumber)] ^ prod[mod(i - r, m_PrimeNumber)]) ^ Missing) {
+    if ((prod[ErasureSetID][mod(i - l, m_PrimeNumber)] ^ prod[ErasureSetID][mod(i - r, m_PrimeNumber)]) ^ Missing) {
       for (long long j = 0; j < m_StripeUnitsPerSymbol; ++j) {
         XOR(Recover + j * m_StripeUnitSize,
             pXORBuffer[1] + mod(j - i, m_PrimeNumber) * m_StripeUnitSize,
@@ -677,7 +655,7 @@ bool CRDPProcessor::DecodeThreeErasures(
   }
 
   for (long long i = 0; i < m_PrimeNumber - 1; ++i) {
-    if (prod[i]) {
+    if (prod[ErasureSetID][i]) {
       for (long long j = 0; j < m_StripeUnitsPerSymbol; ++j) {
         XOR(Recover + j * m_StripeUnitSize,
             pXORBuffer[2] + mod(j - i, m_PrimeNumber) * m_StripeUnitSize,
@@ -688,13 +666,14 @@ bool CRDPProcessor::DecodeThreeErasures(
     }
   }
 
-  if ((l < SymbolID || l >= SymbolID + Symbols2Decode) && (r < SymbolID || r >= SymbolID + Symbols2Decode)) {
+  if ((ErasurePosition[0] < SymbolID || ErasurePosition[0] >= SymbolID + Symbols2Decode) &&
+      (ErasurePosition[2] < SymbolID || ErasurePosition[2] >= SymbolID + Symbols2Decode)) {
     return Result;
   }
 
   XOR(pXORBuffer[0], Recover, m_StripeUnitSize * m_StripeUnitsPerSymbol);
   for (long long i = 0; i < m_StripeUnitsPerSymbol; ++i) {
-    long long Diag = (i + m) % m_PrimeNumber;
+    long long Diag = (i + (ErasurePosition[1] + m_Shortering)) % m_PrimeNumber;
     if (Diag == m_PrimeNumber - 1) {
       continue;
     }
@@ -704,17 +683,37 @@ bool CRDPProcessor::DecodeThreeErasures(
   long long diag_step = 1;
 
   const std::array<unsigned char*, 2> RecoverResults = {
-      (l >= SymbolID) && (l < SymbolID + Symbols2Decode)
-          ? pDest + (l - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
+      (ErasurePosition[0] >= SymbolID) && (ErasurePosition[0] < SymbolID + Symbols2Decode)
+          ? pDest + (ErasurePosition[0] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
           : nullptr,
-      (r >= SymbolID) && (r < SymbolID + Symbols2Decode)
-          ? pDest + (r - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
+      (ErasurePosition[2] >= SymbolID) && (ErasurePosition[2] < SymbolID + Symbols2Decode)
+          ? pDest + (ErasurePosition[2] - SymbolID) * m_StripeUnitSize * m_StripeUnitsPerSymbol
           : nullptr
   };
 
   long long step = diag_step * (r - l);
-  iterative_restore(diag_step, r, l, RecoverResults, pXORBuffer, mod(diag_step * l - 1, m_PrimeNumber), -step, 1, 0);
-  iterative_restore(diag_step, l, r, RecoverResults, pXORBuffer, mod(diag_step * r - 1, m_PrimeNumber), step, 0, 1);
+  iterative_restore(
+      diag_step,
+      ErasurePosition[2],
+      ErasurePosition[0],
+      RecoverResults,
+      pXORBuffer,
+      mod(diag_step * (ErasurePosition[0] + m_Shortering) - 1, m_PrimeNumber),
+      -step,
+      1,
+      0
+  );
+  iterative_restore(
+      diag_step,
+      ErasurePosition[0],
+      ErasurePosition[2],
+      RecoverResults,
+      pXORBuffer,
+      mod(diag_step * (ErasurePosition[2] + m_Shortering) - 1, m_PrimeNumber),
+      step,
+      0,
+      1
+  );
   return Result;
 }
 
@@ -770,7 +769,7 @@ bool CRDPProcessor::UpdateInformationSymbols(
 ) {
   bool Result = true;
   if (std::ranges::all_of(std::views::iota(0u, MAX_ERASURES), [&](unsigned i) {
-        return IsErased(ErasureSetID, m_PrimeNumber - 1 + i);
+        return IsErased(ErasureSetID, m_Dimension + i);
       })) {
     long long CurrentSymbol = StripeUnitID / m_StripeUnitsPerSymbol;
     long long CurrentSubsymbol = StripeUnitID % m_StripeUnitsPerSymbol;
@@ -796,10 +795,9 @@ bool CRDPProcessor::UpdateInformationSymbols(
     std::array<unsigned char*, MAX_ERASURES> pXORBuffer{};
     unsigned char* pReadBuffer = m_pRDPXORBuffer + (MAX_ERASURES + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
     for (unsigned i = 0; i < MAX_ERASURES; ++i) {
-      if (!IsErased(ErasureSetID, m_PrimeNumber - 1 + i)) {
+      if (!IsErased(ErasureSetID, m_Dimension + i)) {
         pXORBuffer[i] = m_pRDPXORBuffer + (i + ThreadID * BLOCKS_PER_BUFFER) * BLOCK_SIZE;
-        Result &=
-            ReadStripeUnit(StripeID, ErasureSetID, m_PrimeNumber - 1 + i, 0, m_StripeUnitsPerSymbol, pXORBuffer[i]);
+        Result &= ReadStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, m_StripeUnitsPerSymbol, pXORBuffer[i]);
       }
     }
 
@@ -820,11 +818,11 @@ bool CRDPProcessor::UpdateInformationSymbols(
           if (!pXORBuffer[j]) {
             continue;
           }
-          long long Diag = (CurrentSubsymbol + i + CurrentSymbol * j) % m_PrimeNumber;
+          long long Diag = (CurrentSubsymbol + i + j * (CurrentSymbol + m_Shortering)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[j] + Diag * m_StripeUnitSize, pReadBuffer + i * m_StripeUnitSize, m_StripeUnitSize);
           }
-          Diag = (CurrentSubsymbol + i + (m_PrimeNumber - 1) * j) % m_PrimeNumber;
+          Diag = (CurrentSubsymbol + i + j * (m_PrimeNumber - 1)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[j] + Diag * m_StripeUnitSize, pReadBuffer + i * m_StripeUnitSize, m_StripeUnitSize);
           }
@@ -847,11 +845,11 @@ bool CRDPProcessor::UpdateInformationSymbols(
           if (!pXORBuffer[k]) {
             continue;
           }
-          long long Diag = (j + CurrentSymbol * k) % m_PrimeNumber;
+          long long Diag = (j + k * (CurrentSymbol + m_Shortering)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[k] + Diag * m_StripeUnitSize, pReadBuffer + j * m_StripeUnitSize, m_StripeUnitSize);
           }
-          Diag = (j + (m_PrimeNumber - 1) * k) % m_PrimeNumber;
+          Diag = (j + k * (m_PrimeNumber - 1)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[k] + Diag * m_StripeUnitSize, pReadBuffer + j * m_StripeUnitSize, m_StripeUnitSize);
           }
@@ -871,11 +869,11 @@ bool CRDPProcessor::UpdateInformationSymbols(
           if (!pXORBuffer[j]) {
             continue;
           }
-          long long Diag = (CurrentSubsymbol + i + CurrentSymbol * j) % m_PrimeNumber;
+          long long Diag = (i + j * (CurrentSymbol + m_Shortering)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[j] + Diag * m_StripeUnitSize, pReadBuffer + i * m_StripeUnitSize, m_StripeUnitSize);
           }
-          Diag = (CurrentSubsymbol + i + (m_PrimeNumber - 1) * j) % m_PrimeNumber;
+          Diag = (i + j * (m_PrimeNumber - 1)) % m_PrimeNumber;
           if (Diag != m_PrimeNumber - 1) {
             XOR(pXORBuffer[j] + Diag * m_StripeUnitSize, pReadBuffer + i * m_StripeUnitSize, m_StripeUnitSize);
           }
@@ -888,9 +886,48 @@ bool CRDPProcessor::UpdateInformationSymbols(
       if (!pXORBuffer[i]) {
         continue;
       }
-      Result &=
-          WriteStripeUnit(StripeID, ErasureSetID, m_PrimeNumber - 1 + i, 0, m_StripeUnitsPerSymbol, pXORBuffer[i]);
+      Result &= WriteStripeUnit(StripeID, ErasureSetID, m_Dimension + i, 0, m_StripeUnitsPerSymbol, pXORBuffer[i]);
     }
   }
   return Result;
+}
+
+bool CRDPProcessor::IsCorrectable(unsigned ErasureSetID) {
+  unsigned NumOfErasures = GetNumOfErasures(ErasureSetID);
+  if (NumOfErasures == 3 && std::ranges::all_of(std::views::iota(0u, NumOfErasures), [&](auto i) {
+        return GetErasedPosition(ErasureSetID, i) <= m_Dimension;
+      })) {
+    std::array<int, 3> ErasurePosition =
+        {GetErasedPosition(ErasureSetID, 0), GetErasedPosition(ErasureSetID, 1), GetErasedPosition(ErasureSetID, 2)};
+    std::ranges::sort(ErasurePosition);
+    fst.assign(m_PrimeNumber, 0);
+    snd.assign(m_PrimeNumber, 0);
+    prod[ErasureSetID].assign(m_PrimeNumber, 0);
+    long long idx1 = m_PrimeNumber - 1, idx2 = m_PrimeNumber - 1;
+    long long i1 = mod(ErasurePosition[0] + m_Shortering - 1, m_PrimeNumber);
+    long long i2 = mod(ErasurePosition[1] + m_Shortering - 1, m_PrimeNumber);
+
+    for (unsigned s = 1; s <= m_PrimeNumber - 1; ++s) {
+      fst[mod(idx1 - 2 * (ErasurePosition[1] - ErasurePosition[0]), m_PrimeNumber)] =
+          fst[idx1] ^ (i1 == 0 ? 1u : 0u) ^
+          (mod(i1 - (ErasurePosition[1] - ErasurePosition[0]), m_PrimeNumber) == 0 ? 1u : 0u);
+      snd[mod(idx2 - 2 * (ErasurePosition[2] - ErasurePosition[1]), m_PrimeNumber)] =
+          snd[idx2] ^ (i2 == 0 ? 1u : 0u) ^
+          (mod(i2 - (ErasurePosition[2] - ErasurePosition[1]), m_PrimeNumber) == 0 ? 1u : 0u);
+      idx1 = mod(idx1 - 2 * (ErasurePosition[1] - ErasurePosition[0]), m_PrimeNumber);
+      idx2 = mod(idx2 - 2 * (ErasurePosition[2] - ErasurePosition[1]), m_PrimeNumber);
+      i1 = mod(i1 - 2 * (ErasurePosition[1] - ErasurePosition[0]), m_PrimeNumber);
+      i2 = mod(i2 - 2 * (ErasurePosition[2] - ErasurePosition[1]), m_PrimeNumber);
+    }
+    for (long long i = 0; i < m_PrimeNumber; i++) {
+      for (long long j = 0; j < m_PrimeNumber; j++) {
+        prod[ErasureSetID][mod(i + j, m_PrimeNumber)] =
+            prod[ErasureSetID][mod(i + j, m_PrimeNumber)] ^ (fst[i] & snd[j]);
+      }
+    }
+    if (prod[ErasureSetID][m_PrimeNumber - 1]) {
+      std::ranges::for_each(prod[ErasureSetID], [](auto&& e) { e = 1 - e; });
+    }
+  }
+  return NumOfErasures <= MAX_ERASURES;
 }

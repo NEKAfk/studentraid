@@ -1,41 +1,56 @@
+/*********************************************************
+ * RDP.h  - implementation of a RAID-5 processor
+ * Author: N. Zavialov 408627@niuitmo.ru
+ * ********************************************************/
 #ifndef RDP_H
 #define RDP_H
 #include "RAIDProcessor.h"
 
+#include <algorithm>
 #include <array>
+#include <iostream>
+#include <ostream>
+#include <ranges>
+#include <unordered_map>
+#include <vector>
 
 class CRDPProcessor final : public CRAIDProcessor {
 private:
   long long m_PrimeNumber;
   unsigned char* m_pRDPXORBuffer;
+  long long m_Shortering;
 
   static constexpr size_t MAX_ERASURES = 3;
   static constexpr size_t BLOCKS_PER_BUFFER = MAX_ERASURES + 2;
   size_t BLOCK_SIZE;
   size_t BUFFER_SIZE;
 
-  /**
-   * Helper function to read symbols that are not erased and calculate syndroms
-   * @param StripeID the stripe to be processed
-   * @param ErasureSetID identifies the load balancing offset
-   * @param SymbolID the symbol to be processed
-   * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
-   * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
-   * @param ThreadID the ID of the calling thread
-   * @param pXORBuffer pointers to buffer where syndromes will be stored(nullptr for unused syndromes)
-   * @param CalcMissingDiag optional argument for calculating diagonal syndrome of the (m_PrimeNumber-1) diagonal
-   * @return true on a success, false otherwise
-   */
-  bool ReadAndCalcSyndroms(
-      unsigned long long StripeID,
-      unsigned ErasureSetID,
-      unsigned SymbolID,
-      unsigned Symbols2Decode,
-      unsigned char* pDest,
-      size_t ThreadID,
-      std::array<unsigned char*, 3> pXORBuffer,
-      bool CalcMissingDiag
-  );
+  std::vector<unsigned> fst, snd;
+  std::vector<std::vector<unsigned>> prod;
+
+      /**
+       * Helper function to read symbols that are not erased and calculate syndroms
+       * @param StripeID the stripe to be processed
+       * @param ErasureSetID identifies the load balancing offset
+       * @param SymbolID the symbol to be processed
+       * @param Symbols2Decode the number of subsymbols within this symbol to be decoded
+       * @param pDest destination array. Must have size at least Subsymbols2Decode*m_StripeUnitSize
+       * @param ThreadID the ID of the calling thread
+       * @param pXORBuffer pointers to buffer where syndromes will be stored(nullptr for unused syndromes)
+       * @param CalcMissingDiag optional argument for calculating diagonal syndrome of the (m_PrimeNumber-1) diagonal
+       * @return true on a success, false otherwise
+       */
+      bool
+      ReadAndCalcSyndroms(
+          unsigned long long StripeID,
+          unsigned ErasureSetID,
+          unsigned SymbolID,
+          unsigned Symbols2Decode,
+          unsigned char* pDest,
+          size_t ThreadID,
+          std::array<unsigned char*, 3> pXORBuffer,
+          bool CalcMissingDiag
+      );
 
   /**
    * Helper function to restore three erasures
@@ -127,9 +142,7 @@ private:
   ) const;
 
 protected:
-  bool IsCorrectable(unsigned ErasureSetID) override {
-    return GetNumOfErasures(ErasureSetID) <= MAX_ERASURES;
-  }
+  bool IsCorrectable(unsigned ErasureSetID) override;
 
   bool DecodeDataSubsymbols(
       unsigned long long StripeID,
